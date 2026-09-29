@@ -1,9 +1,9 @@
 {
-  "name": "harvv",
-  "version": "1.0.0",
+  "name": "@harvv/cli",
+  "version": "1.0.2",
   "description": "Install the Harvv behavioral analytics pixel. Detect dead clicks, rage clicks, and conversion killers.",
   "bin": {
-    "harvv": "./index.js"
+    "harvv": "index.js"
   },
   "keywords": ["analytics", "ux", "dead-clicks", "rage-clicks", "behavioral", "pixel", "conversion"],
   "author": "Harvv <hello@harvv.com>",
@@ -11,6 +11,6 @@
   "homepage": "https://harvv.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/harvv/cli"
+    "url": "git+https://github.com/AxiomState/harvv-cli.git"
   }
 }
