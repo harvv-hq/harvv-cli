@@ -3,9 +3,9 @@
  * Harvv CLI — Install behavioral analytics in 30 seconds.
  *
  * Usage:
- *   npx harvv@latest              # Interactive setup
- *   npx harvv@latest --key abc123  # Install with existing pixel key
- *   npx harvv@latest issues        # View detected issues (needs API key)
+ *   npx @harvv/cli@latest              # Interactive setup
+ *   npx @harvv/cli@latest --key abc123  # Install with existing pixel key
+ *   npx @harvv/cli@latest issues        # View detected issues (needs API key)
  */
 
 const readline = require('readline');
@@ -45,22 +45,65 @@ function fetch(url, opts = {}) {
 }
 
 function detectProject() {
-  // Check for common project types
+  const cwd = process.cwd();
+  const name = path.basename(cwd);
+
+  // Check for package.json based projects
   if (fs.existsSync('package.json')) {
-    const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    if (deps['next']) return { type: 'nextjs', name: pkg.name };
-    if (deps['gatsby']) return { type: 'gatsby', name: pkg.name };
-    if (deps['nuxt']) return { type: 'nuxt', name: pkg.name };
-    if (deps['@sveltejs/kit']) return { type: 'sveltekit', name: pkg.name };
-    if (deps['react']) return { type: 'react', name: pkg.name };
-    if (deps['vue']) return { type: 'vue', name: pkg.name };
-    return { type: 'node', name: pkg.name };
+    try {
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      if (deps['next']) return { type: 'nextjs', name: pkg.name || name };
+      if (deps['gatsby']) return { type: 'gatsby', name: pkg.name || name };
+      if (deps['nuxt']) return { type: 'nuxt', name: pkg.name || name };
+      if (deps['@sveltejs/kit']) return { type: 'sveltekit', name: pkg.name || name };
+      if (deps['react']) return { type: 'react', name: pkg.name || name };
+      if (deps['vue']) return { type: 'vue', name: pkg.name || name };
+      return { type: 'node', name: pkg.name || name };
+    } catch {}
   }
-  if (fs.existsSync('layout/theme.liquid') || fs.existsSync('templates/index.liquid')) return { type: 'shopify', name: path.basename(process.cwd()) };
-  if (fs.existsSync('wp-content') || fs.existsSync('functions.php')) return { type: 'wordpress', name: path.basename(process.cwd()) };
-  if (fs.existsSync('index.html')) return { type: 'html', name: path.basename(process.cwd()) };
-  return { type: 'unknown', name: path.basename(process.cwd()) };
+
+  // Shopify theme detection — check multiple file patterns
+  // Shopify themes have: layout/, templates/, sections/, snippets/, assets/, config/
+  const shopifyMarkers = [
+    'layout/theme.liquid',
+    'templates/index.liquid',
+    'templates/index.json',
+    'config/settings_schema.json',
+    'sections/header.liquid',
+    'theme.liquid', // flat structure
+  ];
+  if (shopifyMarkers.some(f => fs.existsSync(f))) {
+    return { type: 'shopify', name };
+  }
+  // Also check if we're inside a themes folder or have any .liquid files
+  if (fs.existsSync('layout') && fs.existsSync('templates') && fs.existsSync('sections')) {
+    return { type: 'shopify', name };
+  }
+  // Last resort: any .liquid files anywhere
+  try {
+    const files = fs.readdirSync(cwd);
+    if (files.some(f => f.endsWith('.liquid'))) return { type: 'shopify', name };
+    // Check one level deep for theme structure
+    if (files.includes('layout') || files.includes('sections')) {
+      try {
+        const layoutDir = files.includes('layout') ? fs.readdirSync(path.join(cwd, 'layout')) : [];
+        if (layoutDir.some(f => f.endsWith('.liquid'))) return { type: 'shopify', name };
+      } catch {}
+    }
+  } catch {}
+
+  // WordPress
+  if (fs.existsSync('wp-content') || fs.existsSync('functions.php') || fs.existsSync('wp-config.php') || fs.existsSync('style.css') && fs.existsSync('header.php')) {
+    return { type: 'wordpress', name };
+  }
+
+  // Static HTML
+  if (fs.existsSync('index.html') || fs.existsSync('public/index.html')) {
+    return { type: 'html', name };
+  }
+
+  return { type: 'unknown', name };
 }
 
 function findInstallFile(project) {
@@ -68,11 +111,11 @@ function findInstallFile(project) {
   const checks = {
     nextjs: ['app/layout.tsx', 'app/layout.js', 'app/layout.jsx', 'pages/_document.tsx', 'pages/_document.js', 'pages/_app.tsx', 'pages/_app.js'],
     gatsby: ['src/html.js', 'gatsby-ssr.js'],
-    react: ['index.html', 'public/index.html'],
-    vue: ['index.html', 'public/index.html'],
-    shopify: ['layout/theme.liquid'],
-    wordpress: ['functions.php', 'header.php'],
-    html: ['index.html'],
+    react: ['public/index.html', 'index.html'],
+    vue: ['public/index.html', 'index.html'],
+    shopify: ['layout/theme.liquid', 'theme.liquid', 'snippets/harvv.liquid'],
+    wordpress: ['functions.php', 'header.php', 'wp-content/themes/*/functions.php'],
+    html: ['index.html', 'public/index.html'],
     sveltekit: ['src/app.html'],
     nuxt: ['nuxt.config.ts', 'nuxt.config.js', 'app.vue'],
   };
@@ -173,36 +216,64 @@ async function handleInstall(args) {
 
   // Find target file
   const targetFile = findInstallFile(project);
+  const snippet = getSnippet(key, project);
+  let installed = false;
+
   if (!targetFile) {
-    const snippet = getSnippet(key, project);
-    console.log(`  ${YELLOW}Could not auto-detect install file.${RESET}`);
-    console.log(`  ${DIM}Add this to your HTML <head>:${RESET}\n`);
+    console.log(`\n  ${YELLOW}${BOLD}Could not auto-install the pixel.${RESET}`);
+    console.log(`  ${DIM}We couldn't find the right file to inject the script into.${RESET}\n`);
+    console.log(`  ${BOLD}Manual install:${RESET} add this to your site's ${BOLD}<head>${RESET} section:\n`);
     console.log(`  ${GREEN}${snippet.htmlFallback}${RESET}\n`);
-    return;
-  }
-
-  console.log(`  ${DIM}Installing in:${RESET} ${targetFile}`);
-
-  // Inject
-  const result = injectPixel(targetFile, key, project);
-
-  if (result.success) {
-    console.log(`\n  ${GREEN}${BOLD}Pixel installed!${RESET} ${GREEN}Added to ${result.file}${RESET}\n`);
-  } else if (result.reason === 'manual') {
-    console.log(`\n  ${YELLOW}Auto-inject not supported for ${result.file}${RESET}`);
-    console.log(`  ${DIM}Add this to your project:${RESET}\n`);
-    console.log(`  ${GREEN}${result.snippet.code}${RESET}\n`);
-    console.log(`  ${DIM}Or add to your HTML:${RESET}`);
-    console.log(`  ${GREEN}${result.snippet.htmlFallback}${RESET}\n`);
+    if (project.type === 'shopify') {
+      console.log(`  ${DIM}For Shopify: go to Online Store > Themes > Edit Code >${RESET}`);
+      console.log(`  ${DIM}open ${BOLD}layout/theme.liquid${RESET}${DIM} and paste the script before ${BOLD}</head>${RESET}${DIM}.${RESET}\n`);
+    }
   } else {
-    console.log(`  ${result.reason.includes('already') ? GREEN : YELLOW}${result.reason}${RESET}\n`);
+    console.log(`  ${DIM}Installing in:${RESET} ${targetFile}`);
+    const result = injectPixel(targetFile, key, project);
+
+    if (result.success) {
+      console.log(`\n  ${GREEN}${BOLD}✓ Pixel installed!${RESET} ${GREEN}Added to ${result.file}${RESET}\n`);
+      installed = true;
+    } else if (result.reason === 'manual') {
+      console.log(`\n  ${YELLOW}${BOLD}Manual install required for ${result.file}${RESET}`);
+      console.log(`  ${DIM}Add this to your project:${RESET}\n`);
+      console.log(`  ${GREEN}${result.snippet.code}${RESET}\n`);
+      console.log(`  ${DIM}Or add to your HTML ${BOLD}<head>${RESET}${DIM}:${RESET}`);
+      console.log(`  ${GREEN}${result.snippet.htmlFallback}${RESET}\n`);
+    } else {
+      const isAlreadyInstalled = result.reason.includes('already');
+      console.log(`  ${isAlreadyInstalled ? GREEN : YELLOW}${result.reason}${RESET}\n`);
+      if (isAlreadyInstalled) installed = true;
+      if (!isAlreadyInstalled) {
+        console.log(`  ${BOLD}Manual install:${RESET} add this to your site's ${BOLD}<head>${RESET}:\n`);
+        console.log(`  ${GREEN}${snippet.htmlFallback}${RESET}\n`);
+      }
+    }
   }
 
   console.log(`  ${BOLD}What happens next:${RESET}`);
-  console.log(`  ${DIM}1.${RESET} Deploy your site — the pixel starts capturing automatically`);
-  console.log(`  ${DIM}2.${RESET} After 50+ sessions, issues are detected by AI`);
-  console.log(`  ${DIM}3.${RESET} View your dashboard at ${PURPLE}https://harvv.com/site.html#/app${RESET}`);
-  console.log(`\n  ${DIM}Run ${BOLD}npx harvv issues${RESET}${DIM} to check for detected UX issues.${RESET}\n`);
+  if (installed) {
+    console.log(`  ${DIM}1.${RESET} Deploy your site — the pixel starts capturing automatically`);
+    console.log(`  ${DIM}2.${RESET} Check your email to set your password and log in`);
+    console.log(`  ${DIM}3.${RESET} After 50+ sessions, issues are detected by AI`);
+    console.log(`  ${DIM}4.${RESET} View your dashboard at ${PURPLE}https://harvv.com/site.html#/app${RESET}`);
+  } else {
+    console.log(`  ${DIM}1.${RESET} Check your email — we sent you a login link and install instructions`);
+    console.log(`  ${DIM}2.${RESET} Paste the script above into your site's ${BOLD}<head>${RESET} section`);
+    console.log(`  ${DIM}3.${RESET} Deploy your site to start capturing data`);
+    console.log(`  ${DIM}4.${RESET} Log in at ${PURPLE}https://harvv.com/site.html#/app${RESET} ${DIM}to see your dashboard${RESET}`);
+  }
+
+  // Subdomain hint — prompt to install on subdomains too
+  console.log(`\n  ${BOLD}${YELLOW}📡 Got subdomains?${RESET}`);
+  console.log(`  ${DIM}If your site has subdomains (app.yoursite.com, shop.yoursite.com, etc.),${RESET}`);
+  console.log(`  ${DIM}install the pixel on each one for the full picture.${RESET}`);
+  console.log(`  ${DIM}Your dashboard will auto-detect live subdomains and show you which${RESET}`);
+  console.log(`  ${DIM}ones still need the pixel — with one-click install instructions.${RESET}`);
+  console.log(`  ${DIM}View at: ${PURPLE}https://harvv.com/site.html#/app${RESET}${DIM} → select your site → Overview${RESET}`);
+
+  console.log(`\n  ${DIM}Run ${BOLD}npx @harvv/cli issues${RESET}${DIM} to check for detected UX issues.${RESET}\n`);
 }
 
 async function handleIssues(args) {
@@ -257,10 +328,10 @@ if (command === 'issues' || command === 'check') {
 ${PURPLE}${BOLD}  Harvv CLI${RESET} — Behavioral UX Analytics
 
   ${BOLD}Usage:${RESET}
-    npx harvv@latest              Install pixel (interactive)
-    npx harvv@latest --key=xxx    Install with existing key
-    npx harvv@latest issues       View detected UX issues
-    npx harvv@latest help         Show this help
+    npx @harvv/cli@latest              Install pixel (interactive)
+    npx @harvv/cli@latest --key=xxx    Install with existing key
+    npx @harvv/cli@latest issues       View detected UX issues
+    npx @harvv/cli@latest help         Show this help
 
   ${BOLD}Environment:${RESET}
     HARVV_API_KEY                 API key for issues/stats commands
