@@ -1,6 +1,6 @@
 {
   "name": "@harvv/cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Install the Harvv behavioral analytics pixel. Detect dead clicks, rage clicks, and conversion killers.",
   "bin": {
     "harvv": "index.js"

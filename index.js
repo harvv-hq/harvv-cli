@@ -271,49 +271,67 @@ async function handleInstall(args) {
   console.log(`  ${DIM}install the pixel on each one for the full picture.${RESET}`);
   console.log(`  ${DIM}Your dashboard will auto-detect live subdomains and show you which${RESET}`);
   console.log(`  ${DIM}ones still need the pixel — with one-click install instructions.${RESET}`);
-  console.log(`  ${DIM}View at: ${PURPLE}https://harvv.com/site.html#/app${RESET}${DIM} → select your site → Overview${RESET}`);
+  console.log(`  ${DIM}View at: ${PURPLE}https://harvv.com/newdashboardui${RESET}${DIM} → select your site → Overview${RESET}`);
 
   console.log(`\n  ${DIM}Run ${BOLD}npx @harvv/cli issues${RESET}${DIM} to check for detected UX issues.${RESET}\n`);
+}
+
+// 2026-11-25: Harvv replaced its /v1/sites read routes with the Harvv API,
+// POST /v1/tools/<tool>: the MCP connector's tools over REST, the same answers
+// and the same Credits (https://harvv.com/docs/api). Keys are hk_live_, made in
+// Harvv under Settings, Integrations, API keys (Read only is enough).
+function callTool(apiKey, tool, args) {
+  return fetch(`${API}/v1/tools/${tool}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: JSON.stringify(args || {}),
+  });
 }
 
 async function handleIssues(args) {
   const apiKey = process.env.HARVV_API_KEY || args.find(a => a.startsWith('--api-key='))?.split('=')[1];
   if (!apiKey) {
     console.log(`\n  ${YELLOW}No API key found.${RESET}`);
-    console.log(`  ${DIM}Set HARVV_API_KEY environment variable or pass --api-key=hv_live_xxx${RESET}`);
-    console.log(`  ${DIM}Create one at ${PURPLE}https://harvv.com/site.html#/app${RESET} ${DIM}→ Settings → API Keys${RESET}\n`);
+    console.log(`  ${DIM}Set HARVV_API_KEY environment variable or pass --api-key=hk_live_xxx${RESET}`);
+    console.log(`  ${DIM}Make one in Harvv under ${PURPLE}Settings, Integrations, API keys${RESET} ${DIM}(Read only is enough)${RESET}\n`);
     process.exit(1);
   }
 
   console.log(`\n${PURPLE}${BOLD}  Harvv${RESET} ${DIM}— Fetching issues...${RESET}\n`);
 
-  const sitesRes = await fetch(`${API}/v1/sites`, { headers: { Authorization: `Bearer ${apiKey}` } });
-  if (sitesRes.status !== 200) { console.log(`  ${RED}Auth failed. Check your API key.${RESET}\n`); process.exit(1); }
+  const sitesRes = await callTool(apiKey, 'list_my_sites', {});
+  if (sitesRes.status !== 200) {
+    const why = (sitesRes.data && sitesRes.data.message) || 'Check your API key.';
+    console.log(`  ${RED}Harvv refused the key (${sitesRes.status}).${RESET} ${DIM}${why}${RESET}\n`);
+    process.exit(1);
+  }
 
   const sites = sitesRes.data.sites || [];
-  if (!sites.length) { console.log(`  ${YELLOW}No sites found.${RESET} Add a site at https://harvv.com/site.html#/app\n`); process.exit(1); }
+  if (!sites.length) { console.log(`  ${YELLOW}No sites found.${RESET} Add a site at https://harvv.com/newdashboardui\n`); process.exit(1); }
 
   for (const site of sites) {
-    const issuesRes = await fetch(`${API}/v1/sites/${site.id}/issues`, { headers: { Authorization: `Bearer ${apiKey}` } });
-    const issues = issuesRes.data?.issues || [];
+    const issuesRes = await callTool(apiKey, 'get_issues', { site_id: site.id, status: 'open' });
+    const data = issuesRes.data || {};
+    const issues = Array.isArray(data.issues) ? data.issues : [];
 
-    console.log(`  ${BOLD}${site.name}${RESET} ${DIM}(${site.domain})${RESET} — ${issues.length} issue${issues.length !== 1 ? 's' : ''}`);
-
+    console.log(`  ${BOLD}${site.name}${RESET} ${DIM}(${site.domain})${RESET} — ${issues.length} open issue${issues.length !== 1 ? 's' : ''}`);
+    if (issuesRes.status !== 200) {
+      console.log(`  ${DIM}${data.message || 'Harvv could not answer for this site right now.'}${RESET}\n`);
+      continue;
+    }
     if (!issues.length) {
-      console.log(`  ${DIM}No issues detected yet. Need 50+ sessions for detection.${RESET}\n`);
+      console.log(`  ${DIM}No open issues detected yet.${RESET}\n`);
       continue;
     }
 
     for (const issue of issues.slice(0, 10)) {
-      const title = (issue.description || issue.element || '').split('.')[0];
+      const title = issue.title || String(issue.issue || '').split('.')[0];
       const affected = parseInt(issue.sessions_affected) || 0;
       const statusColor = { open: RED, quoted: YELLOW, approved: GREEN, fixing: PURPLE }[issue.status] || DIM;
-      console.log(`  ${DIM}#${issue.id}${RESET} ${statusColor}[${issue.status}]${RESET} ${title}`);
-      console.log(`     ${DIM}${affected} visitors affected${RESET}`);
-      if (issue.fix_suggestion) console.log(`     ${GREEN}Fix: ${issue.fix_suggestion.substring(0, 100)}...${RESET}`);
+      console.log(`  ${DIM}#${issue.issue_id}${RESET} ${statusColor}[${issue.status}]${RESET} ${title}`);
+      console.log(`     ${DIM}${affected} sessions affected${RESET}`);
+      if (issue.fix) console.log(`     ${GREEN}Fix: ${String(issue.fix).substring(0, 100)}...${RESET}`);
     }
 
-    console.log(`\n  ${DIM}Full dashboard:${RESET} ${PURPLE}${issuesRes.data.dashboard_url}${RESET}\n`);
+    console.log(`\n  ${DIM}Full dashboard:${RESET} ${PURPLE}https://harvv.com/newdashboardui#/site/${site.id}${RESET}\n`);
   }
 }
 
